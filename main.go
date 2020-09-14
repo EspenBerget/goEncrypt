@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/crypto/ssh/terminal"
 )
@@ -98,44 +99,6 @@ func decCMD(filename string) {
 	}
 }
 
-func zipCMD(filename string) {
-	file, err := os.Open(filename)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	defer file.Close()
-	content, err := ioutil.ReadAll(file)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	dest, err := os.Create(filename + ".zip")
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	// buf := new(bytes.Buffer)
-	w := zip.NewWriter(dest)
-	// TODO range over a dir
-	f, err := w.Create(filename)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	_, err = f.Write(content)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	if err = w.Close(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-}
-
 func unzipCMD(filename string) {
 	r, err := zip.OpenReader(filename)
 	if err != nil {
@@ -145,19 +108,66 @@ func unzipCMD(filename string) {
 	defer r.Close()
 
 	for _, f := range r.File {
-		fmt.Printf("Content of %s:\n", f.Name)
 		rc, err := f.Open()
 		if err != nil {
-			fmt.Printf("Error in file %s: %v", f.Name, err)
+			fmt.Printf("Error opening file %s: %v\n", f.Name, err)
 			continue
 		}
-		_, err = io.CopyN(os.Stdout, rc, 256)
+
+		if err = os.MkdirAll(filepath.Dir(f.Name), 0744); err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		file, err := os.Create(f.Name)
 		if err != nil {
-			fmt.Printf("Error in file %s: %v", f.Name, err)
+			fmt.Printf("Error creating file %s\n", f.Name)
 			continue
 		}
+
+		if _, err := io.Copy(file, rc); err != nil {
+			fmt.Printf("Error copying content to file %s\n", f.Name)
+			continue
+		}
+
 		rc.Close()
-		fmt.Println()
+		file.Close()
+	}
+}
+
+func zipCMD(dirname string) {
+	dest, err := os.Create(dirname + ".zip")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	w := zip.NewWriter(dest)
+	err = filepath.Walk(dirname, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		} else if !info.IsDir() {
+			content, err := ioutil.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			f, err := w.Create(path)
+			if err != nil {
+				return err
+			}
+			if _, err := f.Write(content); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	err = w.Close()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
 
