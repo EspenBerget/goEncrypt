@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -15,13 +16,17 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 )
 
+func handleError(err error) {
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
 func getPass() []byte {
 	fmt.Print("Passphrase: ")
 	pass, err := terminal.ReadPassword(0)
-	if err != nil {
-		fmt.Println("Could not read password")
-		os.Exit(1)
-	}
+	handleError(err)
 
 	return pass
 }
@@ -35,53 +40,37 @@ func hashKey(pass []byte) []byte {
 	return h.Sum(nil)
 }
 
-func encCMD(filename string) {
-	text, err := ioutil.ReadFile(filename)
-	if err != nil {
-		fmt.Println("Error reading file", filename)
-		os.Exit(1)
-	}
+func encCMD(dirname string) {
+	text := new(bytes.Buffer)
+	zipF(dirname, text)
 
 	key := hashKey(getPass())
 	c, err := aes.NewCipher(key)
-	if err != nil {
-		fmt.Println("Error generating a cipher")
-		os.Exit(1)
-	}
+	handleError(err)
+
 	gcm, err := cipher.NewGCM(c)
-	if err != nil {
-		fmt.Println("Error generating GCM")
-		os.Exit(1)
-	}
+	handleError(err)
+
 	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	if err := ioutil.WriteFile(filename+".encrypted", gcm.Seal(nonce, nonce, text, nil), 0600); err != nil {
-		fmt.Println("Error writing to file")
-		os.Exit(1)
-	}
+	_, err = io.ReadFull(rand.Reader, nonce)
+	handleError(err)
+
+	err = ioutil.WriteFile(dirname+".encrypted", gcm.Seal(nonce, nonce, text.Bytes(), nil), 0600)
+	handleError(err)
+
 }
 
-func decCMD(filename string) {
-	text, err := ioutil.ReadFile(filename)
-	if err != nil {
-		fmt.Println("Error reading file", filename)
-		os.Exit(1)
-	}
+func decCMD(dirname string) {
+	text, err := ioutil.ReadFile(dirname)
+	handleError(err)
 
 	key := hashKey(getPass())
 	c, err := aes.NewCipher(key)
-	if err != nil {
-		fmt.Println("Error generating a cipher")
-		os.Exit(1)
-	}
+	handleError(err)
+
 	gcm, err := cipher.NewGCM(c)
-	if err != nil {
-		fmt.Println("Error generating GCM")
-		os.Exit(1)
-	}
+	handleError(err)
+
 	nonceSize := gcm.NonceSize()
 	if len(text) < nonceSize {
 		fmt.Println(err)
@@ -89,24 +78,21 @@ func decCMD(filename string) {
 
 	nonce, text := text[:nonceSize], text[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, text, nil)
-	if err != nil {
-		fmt.Println(err)
-	}
+	handleError(err)
 
-	if err := ioutil.WriteFile("out.txt", plaintext, 0600); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	r, err := zip.NewReader(bytes.NewReader(plaintext), int64(len(plaintext)))
+	handleError(err)
+	unzipF(r)
 }
 
-func unzipCMD(filename string) {
-	r, err := zip.OpenReader(filename)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+func unzipCMD(dirname string) {
+	r, err := zip.OpenReader(dirname)
+	handleError(err)
 	defer r.Close()
+	unzipF(&r.Reader)
+}
 
+func unzipF(r *zip.Reader) {
 	for _, f := range r.File {
 		rc, err := f.Open()
 		if err != nil {
@@ -135,14 +121,9 @@ func unzipCMD(filename string) {
 	}
 }
 
-func zipCMD(dirname string) {
-	dest, err := os.Create(dirname + ".zip")
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+func zipF(dirname string, dest io.Writer) {
 	w := zip.NewWriter(dest)
-	err = filepath.Walk(dirname, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dirname, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		} else if !info.IsDir() {
@@ -160,21 +141,21 @@ func zipCMD(dirname string) {
 		}
 		return nil
 	})
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	handleError(err)
 	err = w.Close()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	handleError(err)
+}
+
+func zipCMD(dirname string) {
+	dest, err := os.Create(dirname + ".zip")
+	handleError(err)
+
+	zipF(dirname, dest)
 }
 
 func main() {
 	if len(os.Args) == 3 {
-		cmd := os.Args[1]
-		switch cmd {
+		switch os.Args[1] {
 		case "zip":
 			zipCMD(os.Args[2])
 		case "unzip":
